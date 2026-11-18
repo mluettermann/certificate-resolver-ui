@@ -1,0 +1,30 @@
+# Standalone test setup only. For real use, deploy the UI as part of the
+# resolver stack: https://github.com/mluettermann/certificate_resolver
+services:
+  cert-ui:
+    image: ghcr.io/mluettermann/certificate-resolver-ui:latest
+    build: .
+    container_name: certificate-resolver-ui
+    restart: unless-stopped
+    ports:
+      - "5050:5000"
+    environment:
+      - RESOLVER_CONTAINER=${RESOLVER_CONTAINER:-certificate-resolver}  # name of the running resolver container
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set (openssl rand -hex 32)}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}             # empty = random password (then shown in the log)
+      - DATA_DIR=/data                                     # UI-private: users.json, audit.log
+      - CERT_DIR=/certs                                    # shared certificates (read-only)
+      - CREDS_FILE=/resolver-data/acmedns-credentials.json # acme-dns credentials (read-only)
+      - TARGETS_FILE=/cert-targets.yml                     # same file the resolver reads
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock                                 # to control the resolver
+      - ${DATA_ROOT:-/opt/certificate-resolver}/ui-data:/data                      # UI-private (users.json, audit.log)
+      - ${DATA_ROOT:-/opt/certificate-resolver}/certs:/certs:ro                    # resolver's certs (read)
+      - ${DATA_ROOT:-/opt/certificate-resolver}/data:/resolver-data:ro             # resolver's /data, for the credentials (read)
+      - ${DATA_ROOT:-/opt/certificate-resolver}/cert-targets.yml:/cert-targets.yml # distribution config (read + write)
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="alternate icon" href="/static/favicon.ico">
+<title>Your backup codes</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-slate-900 via-slate-900 to-slate-800 text-slate-100">
+
+<div class="w-full max-w-md">
+  <div class="flex flex-col items-center mb-6">
+    <div class="w-16 h-16 rounded-2xl bg-amber-600/20 ring-1 ring-amber-500/40 flex items-center justify-center mb-3">
+      <svg xmlns="http://www.w3.org/2000/svg" class="w-9 h-9 text-amber-400" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 9v4"></path><path d="M12 17h.01"></path>
+        <path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path>
+      </svg>
+    </div>
+    <h1 class="text-xl font-semibold">Save your backup codes</h1>
+  </div>
+
+  <div class="bg-amber-900/30 border border-amber-700 text-amber-200 text-sm rounded-lg px-4 py-3 mb-4">
+    <strong>These codes are shown only once.</strong> Store them somewhere safe — each one lets you sign in
+    if you lose access to your authenticator app. They cannot be displayed again.
+  </div>
+
+  <div class="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-2xl p-6 shadow-xl">
+    <div class="grid grid-cols-2 gap-2 font-mono text-center mb-4">
+      {% for c in codes %}
+      <div class="bg-slate-900 border border-slate-700 rounded px-2 py-2 tracking-widest">{{ c }}</div>
+      {% endfor %}
+    </div>
+
+    <button id="downloadBtn"
+      class="w-full bg-slate-700 hover:bg-slate-600 py-2 rounded-lg text-sm font-medium transition mb-4">
+      ⬇ Download codes (.txt)
+    </button>
+
+    <label class="flex items-start gap-2 text-sm text-slate-300 mb-4 cursor-pointer">
+      <input type="checkbox" id="ack" class="mt-0.5">
+      <span>I have saved my backup codes in a safe place.</span>
+    </label>
+
+    <a id="continueBtn" href="/dashboard"
+      class="block text-center bg-blue-600/40 pointer-events-none opacity-50 py-2.5 rounded-lg text-sm font-medium transition">
+      Continue to dashboard
+    </a>
+  </div>
+</div>
+
+<script>
+const CODES = {{ codes|tojson }};
+
+document.getElementById("downloadBtn").addEventListener("click", () => {
+  const header = "Certificate Resolver — 2FA backup codes\n" +
+                 "Generated: " + new Date().toISOString() + "\n" +
+                 "Each code can be used once.\n\n";
+  const blob = new Blob([header + CODES.join("\n") + "\n"], {type: "text/plain"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "certificate-resolver-backup-codes.txt";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+});
+
+const ack = document.getElementById("ack");
+const cont = document.getElementById("continueBtn");
+ack.addEventListener("change", () => {
+  const on = ack.checked;
+  cont.classList.toggle("pointer-events-none", !on);
+  cont.classList.toggle("opacity-50", !on);
+  cont.classList.toggle("bg-blue-600/40", !on);
+  cont.classList.toggle("bg-blue-600", on);
+  cont.classList.toggle("hover:bg-blue-500", on);
+});
+</script>
+</body>
+</html>

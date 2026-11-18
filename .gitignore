@@ -1,0 +1,26 @@
+# Local environment / secrets — never commit
+.env
+
+# Runtime state (users, audit log, login attempts) — created at first start
+data/
+users.json
+audit.log
+login_attempts.json
+certs/
+*.pem
+*.key
+*.pfx
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs
+*.log
+
+# OS / editor clutter
+.DS_Store
+.vscode/
+.idea/

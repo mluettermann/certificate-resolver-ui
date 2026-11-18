@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="alternate icon" href="/static/favicon.ico">
+<title>Audit log</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+
+<header class="flex items-center justify-between px-6 py-3 bg-slate-800 border-b border-slate-700">
+  <span class="text-lg font-semibold">Audit log</span>
+  <div class="flex items-center gap-4">
+    <button id="refreshBtn" class="text-sm text-blue-400 hover:text-blue-300">Refresh</button>
+    <a href="/dashboard" class="text-sm text-blue-400 hover:text-blue-300">← Back to dashboard</a>
+  </div>
+</header>
+
+<main class="p-6 max-w-4xl">
+  <div class="bg-slate-800 rounded-xl p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-semibold">Recent activity</h2>
+      <span id="count" class="text-xs text-slate-400"></span>
+    </div>
+    <table class="w-full text-sm">
+      <thead class="text-slate-400 text-left">
+        <tr><th class="py-1 pr-4">Time</th><th class="pr-4">User</th><th class="pr-4">Action</th><th>Target</th></tr>
+      </thead>
+      <tbody id="rows"><tr><td class="py-2 text-slate-400" colspan="4">Loading…</td></tr></tbody>
+    </table>
+    <p class="text-xs text-slate-500 mt-3">Shows the most recent entries (newest first). UI actions only —
+       automatic renewals are logged in the resolver's container logs.</p>
+  </div>
+</main>
+
+<script>
+// Auto-attach the CSRF token to all state-changing fetch() requests + handle session timeout.
+const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+const _origFetch = window.fetch;
+window.fetch = (url, opts = {}) => {
+  const m = (opts.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(m)) {
+    opts.headers = Object.assign({}, opts.headers, {"X-CSRFToken": CSRF});
+  }
+  return _origFetch(url, opts).then(res => {
+    if (res.status === 401) { window.location = "/?expired=1"; }
+    return res;
+  });
+};
+
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+function fmtTime(t){
+  const d = new Date(t);
+  return isNaN(d) ? esc(t) : d.toLocaleString();
+}
+
+function actionBadge(a){
+  const lc = (a || "").toLowerCase();
+  let cls = "bg-slate-700 text-slate-200";
+  if (lc.includes("delete")) cls = "bg-red-900 text-red-200";
+  else if (lc.includes("create") || lc === "issue" || lc.includes("setup")) cls = "bg-green-900 text-green-200";
+  else if (lc.includes("renew") || lc.includes("update") || lc.includes("password") || lc.includes("restart")) cls = "bg-amber-900 text-amber-200";
+  return `<span class="px-2 py-0.5 rounded text-xs ${cls}">${esc(a || "—")}</span>`;
+}
+
+async function load(){
+  const rows = document.getElementById("rows");
+  try{
+    const lines = await (await fetch("/audit")).json();
+    if(!lines.length){ rows.innerHTML = `<tr><td class="py-2 text-slate-400" colspan="4">No activity yet.</td></tr>`; document.getElementById("count").textContent = ""; return; }
+    // Parse "timestamp | user | action | target", newest first.
+    const parsed = lines.map(l => l.trim()).filter(Boolean).map(l => {
+      const p = l.split(" | ");
+      return {time: p[0]||"", user: p[1]||"", action: p[2]||"", target: p.slice(3).join(" | ")||""};
+    }).reverse();
+    rows.innerHTML = parsed.map(e => `
+      <tr class="border-t border-slate-700">
+        <td class="py-2 pr-4 whitespace-nowrap text-slate-300">${fmtTime(e.time)}</td>
+        <td class="pr-4 font-medium">${esc(e.user)}</td>
+        <td class="pr-4">${actionBadge(e.action)}</td>
+        <td class="text-slate-300">${esc(e.target)}</td>
+      </tr>`).join("");
+    document.getElementById("count").textContent = parsed.length + " entr" + (parsed.length===1?"y":"ies");
+  }catch(e){ rows.innerHTML = `<tr><td class="py-2 text-red-400" colspan="4">Failed to load audit log.</td></tr>`; }
+}
+
+document.getElementById("refreshBtn").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>

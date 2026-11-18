@@ -1,0 +1,7 @@
+flask
+gunicorn
+bcrypt
+pyotp
+qrcode[pil]
+python-dateutil
+pyyaml

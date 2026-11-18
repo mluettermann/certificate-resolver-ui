@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="alternate icon" href="/static/favicon.ico">
+<title>Certificate Resolver</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+
+<!-- ── Top bar ─────────────────────────────────────────────── -->
+<header class="flex items-center justify-between px-6 py-3 bg-slate-800 border-b border-slate-700">
+  <div class="flex items-center gap-3">
+    <span class="text-lg font-semibold">Certificate Resolver</span>
+    <span id="daemonStatus" class="text-xs px-2 py-1 rounded-full bg-slate-700 text-slate-300">…</span>
+  </div>
+
+  <!-- Avatar + dropdown -->
+  <div class="relative">
+    <button id="avatarBtn"
+      class="w-9 h-9 rounded-full bg-blue-600 hover:bg-blue-500 flex items-center justify-center font-semibold uppercase">
+      <span id="avatarInitial">?</span>
+    </button>
+
+    <div id="avatarMenu"
+      class="hidden absolute right-0 mt-2 w-60 bg-slate-800 border border-slate-700 rounded-xl shadow-xl py-2 z-20">
+      <div class="px-3 py-1 text-xs uppercase tracking-wide text-slate-400">Signed in as</div>
+      <div class="px-3 pb-2 text-sm font-medium" id="menuUser">—</div>
+      <div class="border-t border-slate-700 my-1"></div>
+
+      <div class="px-3 py-1 text-xs uppercase tracking-wide text-slate-400">Settings</div>
+      <a href="/change-password" class="block px-3 py-2 text-sm hover:bg-slate-700">Change password</a>
+
+      <div id="adminGroup" class="hidden">
+        <div class="px-3 py-1 text-xs uppercase tracking-wide text-slate-400">Administration</div>
+        <a href="/admin/users" class="block px-3 py-2 text-sm hover:bg-slate-700">User management</a>
+        <a href="/admin/audit" class="block px-3 py-2 text-sm hover:bg-slate-700">Audit log</a>
+      </div>
+
+      <div class="border-t border-slate-700 my-1"></div>
+      <a href="/logout" class="block px-3 py-2 text-sm text-red-400 hover:bg-slate-700">Logout</a>
+    </div>
+  </div>
+</header>
+
+<!-- ── Tabs ────────────────────────────────────────────────── -->
+<nav class="px-6 pt-4 flex gap-2">
+  <button data-tab="domain" class="tab-btn px-4 py-2 rounded-t-lg bg-slate-800 border-b-2 border-blue-500 font-medium">Domain Setup</button>
+  <button data-tab="deploy" class="tab-btn px-4 py-2 rounded-t-lg bg-slate-800/40 border-b-2 border-transparent text-slate-400 font-medium">Deploy Setup</button>
+</nav>
+
+<main class="p-6">
+
+  <!-- ── Domain Setup ──────────────────────────────────────── -->
+  <section id="tab-domain">
+    <div class="bg-slate-800 rounded-xl p-4 mb-4">
+      <h2 class="font-semibold mb-3">Add a domain</h2>
+      <div class="flex flex-wrap gap-2 items-center">
+        <input id="domainInput" placeholder="example.com"
+          class="bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm w-64">
+        <button data-act="setup" class="act-btn bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded text-sm">Setup</button>
+      </div>
+      <p class="text-xs text-slate-400 mt-2">Setup registers a new domain with acme-dns. Afterwards use Issue in the table below to obtain its certificate.</p>
+    </div>
+
+    <div class="bg-slate-800 rounded-xl p-4 mb-4">
+      <h2 class="font-semibold mb-3">Domains</h2>
+      <table class="w-full text-sm">
+        <thead class="text-slate-400 text-left">
+          <tr><th class="py-1">Domain</th><th>Status</th><th>Days left</th><th>Expiry date</th><th>Last renew</th><th></th></tr>
+        </thead>
+        <tbody id="domainRows"><tr><td class="py-2 text-slate-400" colspan="6">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="bg-slate-800 rounded-xl p-4">
+      <h2 class="font-semibold mb-2">Output</h2>
+      <pre id="log" class="bg-black/60 rounded p-3 h-72 overflow-auto text-xs whitespace-pre-wrap resize-y"></pre>
+    </div>
+  </section>
+
+  <!-- ── Deploy Setup ──────────────────────────────────────── -->
+  <section id="tab-deploy" class="hidden">
+    <div class="flex flex-wrap gap-2 mb-4">
+      <button id="addDomainBtn" class="bg-blue-600 hover:bg-blue-500 px-3 py-2 rounded text-sm">+ New domain config</button>
+      <button id="saveBtn" class="bg-green-600 hover:bg-green-500 px-3 py-2 rounded text-sm">Save configuration</button>
+      <button id="restartBtn" class="bg-red-600 hover:bg-red-500 px-3 py-2 rounded text-sm">Restart resolver</button>
+      <span id="saveHint" class="text-xs text-slate-400 self-center"></span>
+    </div>
+
+    <div id="domainCards" class="space-y-4"></div>
+    <p class="text-xs text-slate-400 mt-3">
+      Each domain can have several delivery targets. The <strong>Service</strong> picks the delivery method:
+      nginx, Apache, Traefik and nginx&nbsp;Proxy&nbsp;Manager use SSH transfer; IIS uses the SFTP drop for Windows;
+      Proxmox&nbsp;VE installs certificates directly into the PVE cluster filesystem via SSH.
+    </p>
+  </section>
+
+</main>
+
+<script>
+// Auto-attach the CSRF token to all state-changing fetch() requests.
+const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+const _origFetch = window.fetch;
+window.fetch = (url, opts = {}) => {
+  const m = (opts.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(m)) {
+    opts.headers = Object.assign({}, opts.headers, {"X-CSRFToken": CSRF});
+  }
+  return _origFetch(url, opts).then(res => {
+    if (res.status === 401) { window.location = "/?expired=1"; }  // session timed out
+    return res;
+  });
+};
+
+const USER = {username: "{{ user.username }}", role: "{{ user.role }}"};
+const IS_ADMIN = USER.role === "admin";
+const CAN_ISSUE = USER.role === "admin" || USER.role === "technician";
+// Editing deploy targets and deleting domains: technician or admin (not viewer).
+const CAN_DEPLOY = USER.role === "admin" || USER.role === "technician";
+const RO = CAN_DEPLOY ? "" : "disabled";  // make editor inputs read-only for viewers
+
+// ── Avatar menu ────────────────────────────────────────────
+document.getElementById("avatarInitial").textContent = (USER.username[0] || "?");
+document.getElementById("menuUser").textContent = USER.username + "  (" + USER.role + ")";
+if (IS_ADMIN) document.getElementById("adminGroup").classList.remove("hidden");
+
+const avatarBtn = document.getElementById("avatarBtn");
+const avatarMenu = document.getElementById("avatarMenu");
+avatarBtn.addEventListener("click", (e) => { e.stopPropagation(); avatarMenu.classList.toggle("hidden"); });
+document.addEventListener("click", () => avatarMenu.classList.add("hidden"));
+
+// ── Tabs ───────────────────────────────────────────────────
+const tabBtns = document.querySelectorAll(".tab-btn");
+tabBtns.forEach(btn => btn.addEventListener("click", () => {
+  const tab = btn.dataset.tab;
+  document.getElementById("tab-domain").classList.toggle("hidden", tab !== "domain");
+  document.getElementById("tab-deploy").classList.toggle("hidden", tab !== "deploy");
+  tabBtns.forEach(b => {
+    const active = b === btn;
+    b.classList.toggle("border-blue-500", active);
+    b.classList.toggle("border-transparent", !active);
+    b.classList.toggle("text-slate-400", !active);
+    b.classList.toggle("bg-slate-800", active);
+    b.classList.toggle("bg-slate-800/40", !active);
+  });
+  if (tab === "deploy" && !deployLoaded) loadTargets();
+}));
+
+// ── Helpers ────────────────────────────────────────────────
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+// ── Domain Setup: status + list + actions ──────────────────
+async function loadStatus(){
+  try{
+    const d = (await (await fetch("/status")).json()).daemon;
+    const el = document.getElementById("daemonStatus");
+    el.textContent = d.running ? "● daemon running" : "● daemon stopped";
+    el.className = "text-xs px-2 py-1 rounded-full " + (d.running ? "bg-green-900 text-green-300" : "bg-red-900 text-red-300");
+  }catch(e){}
+}
+
+function statusBadge(c){
+  if(!c){
+    return `<span class="inline-flex items-center gap-1.5 text-slate-400">
+      <span class="inline-block w-2.5 h-2.5 rounded-full bg-slate-500"></span>no certificate</span>`;
+  }
+  const map = {ok:["bg-green-500","valid"], warning:["bg-amber-500","expiring soon"], critical:["bg-red-500","critical"]};
+  const [dot,label] = map[c.status] || ["bg-slate-500","unknown"];
+  return `<span class="inline-flex items-center gap-1.5">
+    <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>${label}</span>`;
+}
+
+async function loadDomains(){
+  try{
+    const data = await (await fetch("/domains")).json();
+    const tb = document.getElementById("domainRows");
+    if(!data.length){ tb.innerHTML = `<tr><td class="py-2 text-slate-400" colspan="6">No domains yet.</td></tr>`; return; }
+    tb.innerHTML = data.map(d => {
+      const c = d.cert;
+      const expiry = c ? new Date(c.expiry).toLocaleDateString() : "—";
+      const days = c ? c.days : "—";
+      const last = d.last_renew ? new Date(d.last_renew).toLocaleDateString() : "—";
+      const issueBtn = CAN_ISSUE
+        ? `<button data-act="issue" data-domain="${esc(d.domain)}" class="row-act bg-green-600 hover:bg-green-500 px-2 py-1 rounded text-xs">Issue</button>`
+        : "";
+      const renewBtn = CAN_ISSUE
+        ? `<button data-act="renew" data-domain="${esc(d.domain)}" class="row-act bg-amber-600 hover:bg-amber-500 px-2 py-1 rounded text-xs ml-1">Renew</button>`
+        : "";
+      const deployBtn = CAN_DEPLOY
+        ? `<button data-act="deploy" data-domain="${esc(d.domain)}" class="row-act bg-indigo-600 hover:bg-indigo-500 px-2 py-1 rounded text-xs ml-1">Deploy</button>`
+        : "";
+      const delBtn = CAN_DEPLOY
+        ? `<button data-act="delete" data-domain="${esc(d.domain)}" class="row-act bg-red-600 hover:bg-red-500 px-2 py-1 rounded text-xs ml-1">Delete</button>`
+        : "";
+      const rowActions = issueBtn + renewBtn + deployBtn + delBtn;
+      return `<tr class="border-t border-slate-700">
+        <td class="py-2 font-medium">${esc(d.domain)}</td>
+        <td>${statusBadge(c)}</td>
+        <td>${days}</td>
+        <td>${expiry}</td>
+        <td>${last}</td>
+        <td class="text-right">${rowActions}</td>
+      </tr>`;
+    }).join("");
+  }catch(e){}
+}
+
+async function run(action, domain){
+  if(!domain){ alert("Please enter a domain."); return; }
+  const log = document.getElementById("log");
+  log.textContent += `\n$ ${action} ${domain}\n`;
+  try{
+    const res = await fetch("/run", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({domain, action})
+    });
+    if(!res.ok){ log.textContent += `Error: ${res.status} ${await res.text()}\n`; return; }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    while(true){ const {done,value}=await reader.read(); if(done) break; log.textContent += dec.decode(value); log.scrollTop = log.scrollHeight; }
+  }catch(e){ log.textContent += "Error: " + e + "\n"; }
+  loadDomains();
+}
+
+document.querySelectorAll(".act-btn").forEach(b => b.addEventListener("click", () => {
+  const act = b.dataset.act;
+  if(act === "setup" && !IS_ADMIN){ alert("Only admins can run setup."); return; }
+  if((act === "issue" || act === "renew") && !CAN_ISSUE){ alert("You are not allowed to issue/renew."); return; }
+  run(act, document.getElementById("domainInput").value.trim());
+}));
+
+document.getElementById("domainRows").addEventListener("click", e => {
+  const b = e.target.closest(".row-act"); if(!b) return;
+  if(b.dataset.act === "delete") deleteDomain(b.dataset.domain);
+  else run(b.dataset.act, b.dataset.domain);
+});
+
+async function deleteDomain(domain){
+  if(!CAN_DEPLOY) return;
+  if(!confirm(`Delete "${domain}" completely?\n\nThis removes the certificate files, the acme-dns registration and the deploy config for this domain. This cannot be undone.`)) return;
+  const log = document.getElementById("log");
+  log.textContent += `\n$ delete ${domain}\n`;
+  try{
+    const res = await fetch("/domains/" + encodeURIComponent(domain), {method:"DELETE"});
+    const data = await res.json().catch(() => ({}));
+    if(res.ok){
+      if(data.output) log.textContent += data.output + "\n";
+      log.textContent += data.removed_from_yaml ? "Removed from deploy config (cert-targets.yml).\n" : "No deploy config entry for this domain.\n";
+    }else{
+      log.textContent += "Error: " + res.status + " " + (data.error || "") + "\n";
+    }
+    log.scrollTop = log.scrollHeight;
+  }catch(e){ log.textContent += "Error: " + e + "\n"; }
+  loadDomains();
+  if(deployLoaded) loadTargets();
+}
+
+// ── Deploy Setup: model-driven editor ──────────────────────
+const SERVICES = [
+  {val:"",        label:"— select service —", type:"ssh"},
+  {val:"nginx",   label:"nginx",               type:"ssh"},
+  {val:"apache",  label:"Apache",              type:"ssh"},
+  {val:"traefik", label:"Traefik",             type:"ssh"},
+  {val:"npm",     label:"nginx Proxy Manager", type:"ssh"},
+  {val:"iis",     label:"IIS (Windows)",       type:"sftp-drop"},
+  {val:"proxmox", label:"Proxmox VE",          type:"proxmox"},
+];
+const SERVICE_DEFAULTS = {
+  nginx:   {remote_cert_dir:"/etc/nginx/certs",   reload_cmd:"systemctl reload nginx"},
+  apache:  {remote_cert_dir:"/etc/ssl/certs",     reload_cmd:"systemctl reload apache2"},
+  traefik: {remote_cert_dir:"/opt/traefik/certs", reload_cmd:""},
+  npm:     {remote_cert_dir:"/opt/npm/certs",     reload_cmd:""},
+  iis:     {},
+  proxmox: {},
+};
+
+let model = [];
+let deployLoaded = false;
+
+function newEntry(){
+  return {type:"ssh", service:"", host:"", port:22, user:"root",
+          key:"/data/ssh/id_ed25519", remote_cert_dir:"", reload_cmd:"", sftp_users_str:""};
+}
+
+function mappingToModel(mapping){
+  return Object.keys(mapping).map(dom => ({
+    domain: dom,
+    entries: (mapping[dom]||[]).map(e => {
+      if(e.type === "sftp-drop"){
+        let u = e.sftp_users || [];
+        if(typeof u === "string") u = [u];
+        return {type:"sftp-drop", service:e.service||"iis", sftp_users_str:u.join(", ")};
+      }
+      if(e.type === "proxmox"){
+        return {type:"proxmox", service:"proxmox", host:e.host||"", port:e.port||22,
+                user:e.user||"root", key:e.key||"/data/ssh/id_ed25519",
+                remote_cert_dir:"", reload_cmd:"", sftp_users_str:""};
+      }
+      return {type:"ssh", service:e.service||"", host:e.host||"", port:e.port||22,
+              user:e.user||"root", key:e.key||"/data/ssh/id_ed25519",
+              remote_cert_dir:e.remote_cert_dir||"", reload_cmd:e.reload_cmd||""};
+    })
+  }));
+}
+
+function buildMapping(){
+  const out = {};
+  model.forEach(card => {
+    const dom = (card.domain||"").trim();
+    if(!dom) return;
+    out[dom] = card.entries.map(e => {
+      if(e.type === "sftp-drop"){
+        const users = (e.sftp_users_str||"").split(",").map(s=>s.trim()).filter(Boolean);
+        const o = {type:"sftp-drop"};
+        if(e.service) o.service = e.service;
+        o.sftp_users = users;
+        return o;
+      }
+      if(e.type === "proxmox"){
+        const o = {type:"proxmox"};
+        if(e.host) o.host = e.host;
+        o.port = parseInt(e.port,10) || 22;
+        o.user = e.user || "root";
+        o.key = e.key || "/data/ssh/id_ed25519";
+        return o;
+      }
+      const o = {type:"ssh"};
+      if(e.service) o.service = e.service;
+      if(e.host) o.host = e.host;
+      o.port = parseInt(e.port,10) || 22;
+      o.user = e.user || "root";
+      o.key = e.key || "/data/ssh/id_ed25519";
+      if(e.remote_cert_dir) o.remote_cert_dir = e.remote_cert_dir;
+      if(e.reload_cmd) o.reload_cmd = e.reload_cmd;
+      return o;
+    });
+  });
+  return out;
+}
+
+function serviceOptions(sel){
+  return SERVICES.map(s => `<option value="${s.val}" ${s.val===sel?"selected":""}>${esc(s.label)}</option>`).join("");
+}
+
+function entryHtml(di, ei, e){
+  const isSftp    = e.type === "sftp-drop";
+  const isProxmox = e.type === "proxmox";
+  const ssh = `
+    <div class="grid grid-cols-2 gap-2 mt-2">
+      <label class="text-xs text-slate-400">Host
+        <input ${RO} data-di="${di}" data-ei="${ei}" data-field="host" value="${esc(e.host)}" placeholder="server.example.com"
+          class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+      <label class="text-xs text-slate-400">Port
+        <input ${RO} data-di="${di}" data-ei="${ei}" data-field="port" value="${esc(e.port)}" placeholder="22"
+          class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+    </div>
+    <details class="mt-2">
+      <summary class="text-xs text-slate-400 cursor-pointer">Advanced (SSH)</summary>
+      <div class="grid grid-cols-2 gap-2 mt-2">
+        <label class="text-xs text-slate-400">SSH user
+          <input ${RO} data-di="${di}" data-ei="${ei}" data-field="user" value="${esc(e.user)}"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+        <label class="text-xs text-slate-400">SSH key (in container)
+          <input ${RO} data-di="${di}" data-ei="${ei}" data-field="key" value="${esc(e.key)}"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+        <label class="text-xs text-slate-400 col-span-2">Remote cert dir
+          <input ${RO} data-di="${di}" data-ei="${ei}" data-field="remote_cert_dir" value="${esc(e.remote_cert_dir)}" placeholder="/etc/nginx/certs"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+        <label class="text-xs text-slate-400 col-span-2">Reload command (optional)
+          <input ${RO} data-di="${di}" data-ei="${ei}" data-field="reload_cmd" value="${esc(e.reload_cmd)}" placeholder="systemctl reload nginx"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+      </div>
+    </details>`;
+  const sftp = `
+    <label class="block text-xs text-slate-400 mt-2">SFTP users (comma separated)
+      <input ${RO} data-di="${di}" data-ei="${ei}" data-field="sftp_users_str" value="${esc(e.sftp_users_str)}" placeholder="win-iis-1, win-iis-2"
+        class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+    <p class="text-xs text-slate-500 mt-1">Add users on the host with scripts/host/sftp-add-user.sh</p>`;
+  const proxmox = `
+    <div class="grid grid-cols-2 gap-2 mt-2">
+      <label class="text-xs text-slate-400">Host
+        <input ${RO} data-di="${di}" data-ei="${ei}" data-field="host" value="${esc(e.host)}" placeholder="proxmox.example.com"
+          class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+      <label class="text-xs text-slate-400">Port
+        <input ${RO} data-di="${di}" data-ei="${ei}" data-field="port" value="${esc(e.port)}" placeholder="22"
+          class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+    </div>
+    <details class="mt-2">
+      <summary class="text-xs text-slate-400 cursor-pointer">Advanced (SSH)</summary>
+      <div class="grid grid-cols-2 gap-2 mt-2">
+        <label class="text-xs text-slate-400">SSH user
+          <input ${RO} data-di="${di}" data-ei="${ei}" data-field="user" value="${esc(e.user)}"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+        <label class="text-xs text-slate-400">SSH key (in container)
+          <input ${RO} data-di="${di}" data-ei="${ei}" data-field="key" value="${esc(e.key)}"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+      </div>
+      <p class="text-xs text-slate-500 mt-1">Installs to /etc/pve/local/ and restarts pveproxy automatically.</p>
+    </details>`;
+  const delTargetBtn = CAN_DEPLOY
+    ? `<button data-action="del-entry" data-di="${di}" data-ei="${ei}" class="ml-auto text-xs text-red-400 hover:text-red-300">Remove target</button>`
+    : "";
+  const typeLabel = isProxmox ? "SSH (Proxmox VE)" : isSftp ? "SFTP drop" : "SSH transfer";
+  return `
+    <div class="border border-slate-700 rounded-lg p-3">
+      <div class="flex items-center gap-2">
+        <select ${RO} data-role="service" data-di="${di}" data-ei="${ei}"
+          class="bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm">${serviceOptions(e.service)}</select>
+        <span class="text-xs text-slate-500">${typeLabel}</span>
+        ${delTargetBtn}
+      </div>
+      ${isProxmox ? proxmox : isSftp ? sftp : ssh}
+    </div>`;
+}
+
+function render(){
+  const wrap = document.getElementById("domainCards");
+  if(!model.length){
+    wrap.innerHTML = `<p class="text-slate-400 text-sm">No deploy targets configured yet. Click “+ New domain config”.</p>`;
+    return;
+  }
+  wrap.innerHTML = model.map((card, di) => `
+    <div class="bg-slate-800 rounded-xl p-4">
+      <div class="flex items-center gap-2 mb-3">
+        <input ${RO} data-role="domain" data-di="${di}" value="${esc(card.domain)}" placeholder="example.com"
+          class="bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm font-medium w-72">
+        ${CAN_DEPLOY ? `<button data-action="del-domain" data-di="${di}" class="ml-auto text-xs text-red-400 hover:text-red-300">Remove domain</button>` : ""}
+      </div>
+      <div class="space-y-2">${card.entries.map((e, ei) => entryHtml(di, ei, e)).join("")}</div>
+      ${CAN_DEPLOY ? `<button data-action="add-entry" data-di="${di}" class="mt-3 text-sm text-blue-400 hover:text-blue-300">+ Add target</button>` : ""}
+    </div>`).join("");
+}
+
+const cards = document.getElementById("domainCards");
+cards.addEventListener("input", e => {
+  const el = e.target;
+  if(el.dataset.role === "service") return;
+  const di = el.dataset.di;
+  if(di === undefined) return;
+  if(el.dataset.role === "domain"){ model[+di].domain = el.value; return; }
+  const ei = el.dataset.ei, f = el.dataset.field;
+  if(ei !== undefined && f) model[+di].entries[+ei][f] = el.value;
+});
+cards.addEventListener("change", e => {
+  const el = e.target;
+  if(el.dataset.role !== "service") return;
+  const di = +el.dataset.di, ei = +el.dataset.ei, svc = el.value;
+  const ent = model[di].entries[ei];
+  ent.service = svc;
+  const meta = SERVICES.find(s => s.val === svc);
+  ent.type = meta ? meta.type : "ssh";
+  if(ent.type === "ssh" || ent.type === "proxmox"){
+    const d = SERVICE_DEFAULTS[svc] || {};
+    if(ent.type === "ssh"){
+      if(!ent.remote_cert_dir && d.remote_cert_dir) ent.remote_cert_dir = d.remote_cert_dir;
+      if((!ent.reload_cmd) && d.reload_cmd) ent.reload_cmd = d.reload_cmd;
+    }
+    if(!ent.port) ent.port = 22;
+    if(!ent.user) ent.user = "root";
+    if(!ent.key) ent.key = "/data/ssh/id_ed25519";
+  }
+  render();
+});
+cards.addEventListener("click", e => {
+  if(!CAN_DEPLOY) return;
+  const b = e.target.closest("button"); if(!b) return;
+  const a = b.dataset.action;
+  if(a === "add-entry"){ model[+b.dataset.di].entries.push(newEntry()); render(); }
+  else if(a === "del-entry"){ model[+b.dataset.di].entries.splice(+b.dataset.ei,1); render(); }
+  else if(a === "del-domain"){ model.splice(+b.dataset.di,1); render(); }
+});
+
+document.getElementById("addDomainBtn").addEventListener("click", () => {
+  model.push({domain:"", entries:[newEntry()]}); render();
+});
+
+async function loadTargets(){
+  try{
+    const mapping = await (await fetch("/targets")).json();
+    model = mappingToModel(mapping || {});
+    deployLoaded = true;
+    render();
+  }catch(e){ document.getElementById("domainCards").innerHTML = `<p class="text-red-400 text-sm">Failed to load targets.</p>`; }
+}
+
+document.getElementById("saveBtn").addEventListener("click", async () => {
+  const hint = document.getElementById("saveHint");
+  try{
+    const res = await fetch("/targets", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(buildMapping())
+    });
+    hint.textContent = res.ok ? "Saved ✓ (restart resolver to apply)" : ("Error: " + res.status + " " + await res.text());
+    hint.className = "text-xs self-center " + (res.ok ? "text-green-400" : "text-red-400");
+  }catch(e){ hint.textContent = "Error: " + e; hint.className = "text-xs self-center text-red-400"; }
+});
+
+document.getElementById("restartBtn").addEventListener("click", async () => {
+  if(!confirm("Restart the resolver container now?")) return;
+  const hint = document.getElementById("saveHint");
+  try{
+    const res = await fetch("/targets/restart", {method:"POST"});
+    hint.textContent = res.ok ? "Resolver restarted ✓" : ("Error: " + res.status);
+    hint.className = "text-xs self-center " + (res.ok ? "text-green-400" : "text-red-400");
+  }catch(e){ hint.textContent = "Error: " + e; hint.className = "text-xs self-center text-red-400"; }
+});
+
+if(!CAN_DEPLOY){
+  ["addDomainBtn","saveBtn","restartBtn"].forEach(id => { const el=document.getElementById(id); el.disabled=true; el.classList.add("opacity-40","cursor-not-allowed"); });
+  document.getElementById("saveHint").textContent = "Read-only (technician or admin required to edit).";
+}
+
+// ── Init ───────────────────────────────────────────────────
+loadStatus(); loadDomains();
+setInterval(() => { loadStatus(); loadDomains(); }, 15000);
+</script>
+</body>
+</html>

@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="alternate icon" href="/static/favicon.ico">
+<title>User management</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+
+<header class="flex items-center justify-between px-6 py-3 bg-slate-800 border-b border-slate-700">
+  <span class="text-lg font-semibold">User management</span>
+  <a href="/dashboard" class="text-sm text-blue-400 hover:text-blue-300">← Back to dashboard</a>
+</header>
+
+<main class="p-6 max-w-3xl">
+
+  <!-- Add user -->
+  <div class="bg-slate-800 rounded-xl p-4 mb-6">
+    <h2 class="font-semibold mb-3">Add user</h2>
+    <div class="flex flex-wrap gap-2 items-end">
+      <label class="text-xs text-slate-400">Username
+        <input id="nu" class="mt-1 block bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm w-48"></label>
+      <label class="text-xs text-slate-400">Password
+        <input id="np" type="password" class="mt-1 block bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm w-48"></label>
+      <label class="text-xs text-slate-400">Role
+        <select id="nr" class="mt-1 block bg-slate-900 border border-slate-600 rounded px-3 py-2 text-sm w-40">
+          <option value="admin">admin</option>
+          <option value="technician">technician</option>
+          <option value="viewer">viewer</option>
+        </select></label>
+      <button id="addBtn" class="bg-green-600 hover:bg-green-500 px-3 py-2 rounded text-sm">Create</button>
+    </div>
+    <p id="addHint" class="text-xs mt-2"></p>
+    <p class="text-xs text-slate-500 mt-1">Roles: admin (full access), technician (issue/renew), viewer (read-only). New users set up 2FA on first login.</p>
+  </div>
+
+  <!-- User list -->
+  <div class="bg-slate-800 rounded-xl p-4">
+    <h2 class="font-semibold mb-3">Users</h2>
+    <table class="w-full text-sm">
+      <thead class="text-slate-400 text-left">
+        <tr><th class="py-1">Username</th><th>Role</th><th></th></tr>
+      </thead>
+      <tbody id="rows"><tr><td class="py-2 text-slate-400" colspan="3">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+</main>
+
+<script>
+// Auto-attach the CSRF token to all state-changing fetch() requests.
+const CSRF = document.querySelector('meta[name="csrf-token"]').content;
+const _origFetch = window.fetch;
+window.fetch = (url, opts = {}) => {
+  const m = (opts.method || "GET").toUpperCase();
+  if (!["GET", "HEAD", "OPTIONS"].includes(m)) {
+    opts.headers = Object.assign({}, opts.headers, {"X-CSRFToken": CSRF});
+  }
+  return _origFetch(url, opts).then(res => {
+    if (res.status === 401) { window.location = "/?expired=1"; }  // session timed out
+    return res;
+  });
+};
+
+const ME = "{{ user.username }}";
+function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+async function load(){
+  const rows = document.getElementById("rows");
+  try{
+    const data = await (await fetch("/users")).json();
+    if(!data.length){ rows.innerHTML = `<tr><td class="py-2 text-slate-400" colspan="3">No users.</td></tr>`; return; }
+    rows.innerHTML = data.map(u => `
+      <tr class="border-t border-slate-700">
+        <td class="py-2 font-medium">${esc(u.username)}</td>
+        <td>${esc(u.role)}</td>
+        <td class="text-right">
+          ${u.username === ME
+            ? '<span class="text-xs text-slate-500">you</span>'
+            : `<button data-del="${esc(u.username)}" class="bg-red-600 hover:bg-red-500 px-2 py-1 rounded text-xs">Delete</button>`}
+        </td>
+      </tr>`).join("");
+  }catch(e){ rows.innerHTML = `<tr><td class="py-2 text-red-400" colspan="3">Failed to load users.</td></tr>`; }
+}
+
+document.getElementById("addBtn").addEventListener("click", async () => {
+  const username = document.getElementById("nu").value.trim();
+  const password = document.getElementById("np").value;
+  const role = document.getElementById("nr").value;
+  const hint = document.getElementById("addHint");
+  if(!username || !password){ hint.textContent = "Username and password are required."; hint.className = "text-xs mt-2 text-red-400"; return; }
+  try{
+    const res = await fetch("/users", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({username, password, role})
+    });
+    if(res.ok){
+      hint.textContent = "User created ✓"; hint.className = "text-xs mt-2 text-green-400";
+      document.getElementById("nu").value = ""; document.getElementById("np").value = "";
+      load();
+    }else{ hint.textContent = "Error: " + res.status + " " + await res.text(); hint.className = "text-xs mt-2 text-red-400"; }
+  }catch(e){ hint.textContent = "Error: " + e; hint.className = "text-xs mt-2 text-red-400"; }
+});
+
+document.getElementById("rows").addEventListener("click", async e => {
+  const b = e.target.closest("button[data-del]"); if(!b) return;
+  const name = b.dataset.del;
+  if(!confirm(`Delete user "${name}"?`)) return;
+  const res = await fetch("/users/" + encodeURIComponent(name), {method:"DELETE"});
+  if(res.ok) load(); else alert("Error: " + res.status);
+});
+
+load();
+</script>
+</body>
+</html>
