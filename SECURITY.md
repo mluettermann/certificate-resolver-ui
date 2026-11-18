@@ -16,6 +16,10 @@ This UI is part of the [Certificate Resolver](https://github.com/mluettermann/ce
 - Enable **2FA for every user**, give users the lowest role they need (`viewer` / `technician` / `admin`), and review the audit log regularly.
 - Keep the UI's data folder (`users.json`, `audit.log`) out of backups that others can read — it contains password hashes and 2FA secrets.
 
+## Supported versions
+
+Security fixes are released for the newest major version only (image tag `1` = newest 1.x). Keep the default `UI_TAG` or update regularly.
+
 ## Reporting a vulnerability
 
 Please **do not open a public issue** for security problems. Use GitHub's private vulnerability reporting instead: *Security → Report a vulnerability* in this repository.

@@ -1,0 +1,45 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "semanticCommits": "enabled",
+  "dependencyDashboard": true,
+  "packageRules": [
+    {
+      "description": "Image dependencies end up in the next release as a patch",
+      "matchManagers": [
+        "dockerfile",
+        "custom.regex",
+        "pip_requirements"
+      ],
+      "semanticCommitType": "fix"
+    },
+    {
+      "description": "Workflow action updates don't trigger a release",
+      "matchManagers": [
+        "github-actions"
+      ],
+      "semanticCommitType": "ci"
+    },
+    {
+      "description": "Major updates need a manual look (config/behaviour changes)",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions pinned via ARG with a '# renovate:' comment in the Dockerfile",
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[a-z-]+) depName=(?<depName>\\S+)\\s+ARG \\w+=(?<currentValue>\\S+)"
+      ]
+    }
+  ]
+}

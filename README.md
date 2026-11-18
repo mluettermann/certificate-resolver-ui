@@ -145,6 +145,39 @@ docker run --rm --network traefik_proxy curlimages/curl -s http://certificate-re
 
 ---
 
+## Versions & updates
+
+Releases follow [Semantic Versioning](https://semver.org/) and are created automatically by [release-please](https://github.com/googleapis/release-please) from the commit history; see [CHANGELOG.md](CHANGELOG.md) and the GitHub releases. Every release publishes these image tags:
+
+| Tag | Meaning |
+|---|---|
+| `1.2.3` | exactly this release |
+| `1.2` | newest patch release of 1.2 |
+| `1` | newest 1.x release — **default in `docker-compose.yml`** |
+| `latest` | newest release, including breaking major versions |
+| `edge` | current `main` branch, untested |
+
+The compose file uses `${UI_TAG:-1}`, so automatic updaters such as Watchtower pick up fixes and new features, but never a breaking major release. Set `UI_TAG` in `.env` to pin something else.
+
+### Compatibility
+
+| UI | Resolver |
+|---|---|
+| 1.x | ≥ 1.0 |
+
+### Contributing: commit messages
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) — they decide the next version number:
+
+| Prefix | Example | Release |
+|---|---|---|
+| `fix:` | `fix: handle empty cert-targets.yml` | patch (1.0.**1**) |
+| `feat:` | `feat: add proxmox backup server target` | minor (1.**1**.0) |
+| `feat!:` / `BREAKING CHANGE:` footer | `feat!: rename UI_SECRET_KEY` | major (**2**.0.0) |
+| `docs:`, `chore:`, `ci:`, `refactor:` | `docs: fix typo` | no release |
+
+---
+
 ## Security
 
 The UI mounts the Docker socket and can trigger certificate issuance and deployment to all configured targets. Please read [SECURITY.md](SECURITY.md) before exposing it.

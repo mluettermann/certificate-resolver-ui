@@ -15,7 +15,7 @@
 #             docker compose -f docker-compose.yml -f deploy/proxy-network/docker-compose.proxy-network.yml up -d
 services:
   cert-ui:
-    image: ghcr.io/mluettermann/certificate-resolver-ui:latest
+    image: ghcr.io/mluettermann/certificate-resolver-ui:${UI_TAG:-1} # x-release-please-major
     container_name: certificate-resolver-ui
     restart: unless-stopped
     ports:
