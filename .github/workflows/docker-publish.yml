@@ -12,6 +12,7 @@ on:
       - "docker-compose.yml"
       - ".env-example"
       - "SECURITY.md"
+      - "deploy/**"
   pull_request:
     branches: [main]
   workflow_dispatch:

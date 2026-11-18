@@ -219,7 +219,9 @@ def audit(action, target=""):
 
 # ───────── UTILS ─────────
 def run_stream(cmd):
-    p = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    # cmd is an argument list — never a shell string (no shell=True), so
+    # user input can't be interpreted as shell syntax.
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in p.stdout:
         yield line
 
@@ -238,7 +240,8 @@ def get_expiry(domain):
     if not os.path.exists(cert_path):
         return None
 
-    out = subprocess.getoutput(f"openssl x509 -enddate -noout -in {cert_path}")
+    out = subprocess.run(["openssl", "x509", "-enddate", "-noout", "-in", cert_path],
+                         capture_output=True, text=True).stdout
 
     try:
         expiry = parser.parse(out.split("=")[1])
@@ -633,12 +636,13 @@ def delete_domain(domain):
     if not require_role(["admin", "technician"]):
         return "forbidden", 403
 
-    if not DOMAIN_RE.match(domain):
+    if not DOMAIN_RE.fullmatch(domain):
         return jsonify({"ok": False, "error": "Invalid domain name."}), 400
 
     # 1. Remove certs + acme-dns registration + acme.sh data inside the resolver.
-    output = subprocess.getoutput(
-        f"docker exec {DOCKER_CONTAINER} /scripts/delete.sh {domain}")
+    _r = subprocess.run(["docker", "exec", DOCKER_CONTAINER, "/scripts/delete.sh", domain],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    output = _r.stdout.rstrip("\n")
 
     # 2. Remove the domain from the distribution config (cert-targets.yml).
     mapping = load_targets()
@@ -662,9 +666,15 @@ def run():
     if not session.get("user"):
         return "unauthorized", 401
 
-    domain = request.json["domain"]
-    action = request.json["action"]
+    body = request.get_json(silent=True) or {}
+    domain = str(body.get("domain", "")).strip()
+    action = str(body.get("action", ""))
     role = session["user"]["role"]
+
+    if action not in ("setup", "issue", "renew", "deploy"):
+        return "unknown action", 400
+    if not DOMAIN_RE.fullmatch(domain):
+        return "invalid domain name", 400
 
     if action == "setup" and role != "admin":
         return "forbidden", 403
@@ -676,13 +686,13 @@ def run():
         return "forbidden", 403
 
     if action == "setup":
-        cmd = f"docker exec {DOCKER_CONTAINER} /scripts/setup.sh {domain}"
+        cmd = ["docker", "exec", DOCKER_CONTAINER, "/scripts/setup.sh", domain]
     elif action == "issue":
-        cmd = f"docker exec {DOCKER_CONTAINER} /scripts/issue.sh {domain}"
+        cmd = ["docker", "exec", DOCKER_CONTAINER, "/scripts/issue.sh", domain]
     elif action == "deploy":
-        cmd = f"docker exec -e CERTDOMAIN={domain} {DOCKER_CONTAINER} /scripts/deploy.sh"
-    else:
-        cmd = f"docker exec {DOCKER_CONTAINER} acme.sh --home /data/acme --renew -d {domain}"
+        cmd = ["docker", "exec", "-e", f"CERTDOMAIN={domain}", DOCKER_CONTAINER, "/scripts/deploy.sh"]
+    else:  # renew
+        cmd = ["docker", "exec", DOCKER_CONTAINER, "acme.sh", "--home", "/data/acme", "--renew", "-d", domain]
 
     audit(action, domain)
 

@@ -1,0 +1,35 @@
+# Traefik override — adds the router labels and joins the Traefik network.
+#
+#   docker compose -f docker-compose.yml -f deploy/traefik/docker-compose.traefik.yml up -d
+#
+# Portainer (Git stack): Compose path "docker-compose.yml",
+#                        Additional path "deploy/traefik/docker-compose.traefik.yml".
+#
+# Required in .env:  DOMAIN, SECURE_COOKIES=true
+# Optional:          TRAEFIK_NETWORK (default traefik_proxy),
+#                    TRAEFIK_ENTRYPOINT (default websecure)
+#
+# TLS certificate: Traefik either uses its own certresolver (uncomment the
+# certresolver label below) or a certificate from the file provider — e.g.
+# one that the resolver itself delivers via an "ssh" target in cert-targets.yml.
+services:
+  cert-ui:
+    networks:
+      default: {}
+      traefik_proxy: {}
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK:-traefik_proxy}
+      traefik.http.routers.cert-ui.rule: Host(`${DOMAIN:?DOMAIN must be set (hostname of the UI)}`)
+      traefik.http.routers.cert-ui.entrypoints: ${TRAEFIK_ENTRYPOINT:-websecure}
+      traefik.http.routers.cert-ui.tls: "true"
+      # traefik.http.routers.cert-ui.tls.certresolver: letsencrypt
+      traefik.http.routers.cert-ui.service: cert-ui
+      traefik.http.services.cert-ui.loadbalancer.server.port: "5000"
+      traefik.http.services.cert-ui.loadbalancer.server.scheme: http
+      traefik.http.services.cert-ui.loadbalancer.passhostheader: "true"
+
+networks:
+  traefik_proxy:
+    name: ${TRAEFIK_NETWORK:-traefik_proxy}
+    external: true

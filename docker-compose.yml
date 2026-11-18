@@ -1,27 +1,48 @@
-# Standalone test setup only. For real use, deploy the UI as part of the
-# resolver stack: https://github.com/mluettermann/certificate_resolver
+# Certificate Resolver UI — base stack, runs next to the resolver.
+#
+# Requirements:
+#   - The resolver (https://github.com/mluettermann/certificate_resolver) is
+#     running on the same Docker host. The UI controls it by container name
+#     (RESOLVER_CONTAINER) via the Docker socket and shares its DATA_ROOT.
+#   - Use the SAME DATA_ROOT / LOG_ROOT as the resolver.
+#
+# This file has NO reverse proxy. The UI only listens on 127.0.0.1:5050, so
+# it is not reachable from the network without one. Pick a variant in deploy/:
+#   Traefik:  docker compose -f docker-compose.yml -f deploy/traefik/docker-compose.traefik.yml up -d
+#   Caddy:    deploy/caddy/Caddyfile
+#   nginx:    deploy/nginx/cert-ui.conf
+#   Proxy running as a container (Caddy/nginx/NPM):
+#             docker compose -f docker-compose.yml -f deploy/proxy-network/docker-compose.proxy-network.yml up -d
 services:
   cert-ui:
     image: ghcr.io/mluettermann/certificate-resolver-ui:latest
-    build: .
     container_name: certificate-resolver-ui
     restart: unless-stopped
     ports:
-      - "5050:5000"
+      - "127.0.0.1:5050:5000"     # localhost only; use "5050:5000" to expose it in the LAN (no TLS!)
     environment:
-      - RESOLVER_CONTAINER=${RESOLVER_CONTAINER:-certificate-resolver}  # name of the running resolver container
+      - RESOLVER_CONTAINER=${RESOLVER_CONTAINER:-certificate-resolver}   # container_name of the resolver
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set (openssl rand -hex 32)}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}             # empty = random password (then shown in the log)
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}                 # empty = random password (then shown in the log)
+      - SECURE_COOKIES=${SECURE_COOKIES:-false}            # set true only when the UI runs behind TLS
+      - TRUST_PROXY=${TRUST_PROXY:-true}                   # honor X-Forwarded-For from Traefik (real client IP in logs)
+      - PROXY_HOPS=${PROXY_HOPS:-1}
+      - SESSION_TIMEOUT_MINUTES=${SESSION_TIMEOUT_MINUTES:-30}
+      - LOGIN_MAX_ATTEMPTS=${LOGIN_MAX_ATTEMPTS:-5}
+      - LOGIN_LOCKOUT_MINUTES=${LOGIN_LOCKOUT_MINUTES:-15}
       - DATA_DIR=/data                                     # UI-private: users.json, audit.log
-      - CERT_DIR=/certs                                    # shared certificates (read-only)
+      - LOG_DIR=/logs                                      # access/error logs -> shared /logs mount
+      - CERT_DIR=/certs                                    # resolver's certificates (read-only)
       - CREDS_FILE=/resolver-data/acmedns-credentials.json # acme-dns credentials (read-only)
       - TARGETS_FILE=/cert-targets.yml                     # same file the resolver reads
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock                                 # to control the resolver
-      - ${DATA_ROOT:-/opt/certificate-resolver}/ui-data:/data                      # UI-private (users.json, audit.log)
-      - ${DATA_ROOT:-/opt/certificate-resolver}/certs:/certs:ro                    # resolver's certs (read)
-      - ${DATA_ROOT:-/opt/certificate-resolver}/data:/resolver-data:ro             # resolver's /data, for the credentials (read)
-      - ${DATA_ROOT:-/opt/certificate-resolver}/cert-targets.yml:/cert-targets.yml # distribution config (read + write)
+      - /var/run/docker.sock:/var/run/docker.sock                                   # to control the resolver
+      - ${DATA_ROOT:-/opt/certificate-resolver}/ui-data:/data                        # UI-private (users.json, audit.log)
+      - ${DATA_ROOT:-/opt/certificate-resolver}/certs:/certs:ro                      # resolver's certs (read)
+      - ${DATA_ROOT:-/opt/certificate-resolver}/data:/resolver-data:ro               # resolver's /data, for the credentials (read)
+      - ${DATA_ROOT:-/opt/certificate-resolver}/cert-targets.yml:/cert-targets.yml   # distribution config (read + write)
+      - ${LOG_ROOT:-/var/log/certificate_resolver}:/logs                            # shared log folder
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=3)"]
       interval: 30s

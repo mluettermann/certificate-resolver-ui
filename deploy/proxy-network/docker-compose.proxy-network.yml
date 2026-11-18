@@ -1,0 +1,20 @@
+# For a reverse proxy that runs as a CONTAINER (Caddy, nginx, Nginx Proxy
+# Manager, ...): joins the proxy's Docker network so the proxy can reach the
+# UI at http://certificate-resolver-ui:5000 instead of 127.0.0.1:5050.
+#
+#   docker compose -f docker-compose.yml -f deploy/proxy-network/docker-compose.proxy-network.yml up -d
+#
+# Portainer (Git stack): add this file as an "Additional path".
+#
+# PROXY_NETWORK in .env = name of the existing network your proxy is in
+# (docker network ls). Not needed if the proxy runs directly on the host.
+services:
+  cert-ui:
+    networks:
+      default: {}
+      proxy: {}
+
+networks:
+  proxy:
+    name: ${PROXY_NETWORK:?PROXY_NETWORK must be set (docker network ls)}
+    external: true

@@ -2,7 +2,7 @@
 
 Web interface for the [Certificate Resolver](https://github.com/mluettermann/certificate_resolver) — a Flask app to manage wildcard certificates, deployment targets, and users, secured with login + two-factor authentication.
 
-This repository builds the **`certificate-resolver-ui`** image. The container is **deployed as part of the resolver stack** (the `cert-ui` service in the resolver's `docker-compose.yml`); it is not run on its own in production.
+This repository builds the **`certificate-resolver-ui`** image. The UI is **optional**: the resolver works on its own via the CLI. The UI runs as its own stack next to the resolver, on the same Docker host.
 
 ---
 
@@ -21,9 +21,52 @@ It controls the resolver container via the mounted Docker socket (`docker exec`)
 
 ## How it runs
 
-- **Production:** prebuilt images are published to `ghcr.io/mluettermann/certificate-resolver-ui` by GitHub Actions and pulled by the resolver stack. The `cert-ui` service mounts the Docker socket, the shared data, and the log folder, and sits behind Traefik for TLS. See the [resolver README](https://github.com/mluettermann/certificate_resolver#deployment) for full deployment.
+- **Image:** prebuilt images are published to `ghcr.io/mluettermann/certificate-resolver-ui` by GitHub Actions. To build it yourself: `docker build -t ghcr.io/mluettermann/certificate-resolver-ui:latest .`
+- **Stack:** the `docker-compose.yml` in this repo is the deployment. It mounts the Docker socket, the resolver's shared data and the log folder; a reverse proxy of your choice (Traefik, Caddy, nginx — see `deploy/`) provides TLS.
 - **WSGI server:** gunicorn (`gunicorn.conf.py`), binding `[::]:5000` (dual-stack). Access logs go to rotating files; stdout shows status only.
 
+---
+
+## Deployment
+
+**Prerequisite:** the [resolver](https://github.com/mluettermann/certificate_resolver#deployment) is installed and running on the same host (its `bootstrap.sh` already creates `DATA_ROOT/ui-data/`).
+
+### 1. Configure
+
+```bash
+git clone https://github.com/mluettermann/certificate-resolver-ui.git
+cd certificate-resolver-ui
+cp .env-example .env        # same DATA_ROOT / LOG_ROOT as the resolver
+sed -i "s/^SECRET_KEY=.*/SECRET_KEY=$(openssl rand -hex 32)/" .env
+```
+
+### 2. Choose how the UI is reached
+
+The base `docker-compose.yml` contains **no reverse proxy** and binds the UI to `127.0.0.1:5050` only, so it is never exposed unencrypted by accident. Put a TLS reverse proxy in front of it:
+
+| Variant | Files | Start |
+|---|---|---|
+| **Traefik** (labels) | [`deploy/traefik/docker-compose.traefik.yml`](deploy/traefik/docker-compose.traefik.yml) | `docker compose -f docker-compose.yml -f deploy/traefik/docker-compose.traefik.yml up -d` |
+| **Caddy** on the host | [`deploy/caddy/Caddyfile`](deploy/caddy/Caddyfile) | `docker compose up -d`, add the site block to your Caddyfile |
+| **nginx** on the host | [`deploy/nginx/cert-ui.conf`](deploy/nginx/cert-ui.conf) | `docker compose up -d`, add the server block to nginx |
+| **Caddy / nginx / NPM as a container** | [`deploy/proxy-network/docker-compose.proxy-network.yml`](deploy/proxy-network/docker-compose.proxy-network.yml) + the config above | `docker compose -f docker-compose.yml -f deploy/proxy-network/docker-compose.proxy-network.yml up -d`, upstream `certificate-resolver-ui:5000` |
+| **No proxy** (admin only) | — | `docker compose up -d`, then `ssh -L 5050:127.0.0.1:5050 <host>` and open `http://localhost:5050` |
+
+For every TLS variant set `SECURE_COOKIES=true` in `.env`. Traefik additionally needs `DOMAIN` (and optionally `TRAEFIK_NETWORK` / `TRAEFIK_ENTRYPOINT`); the container-proxy variant needs `PROXY_NETWORK`.
+
+The proxy's TLS certificate can come from the resolver itself — deliver it with an `ssh` target in `cert-targets.yml`. That also works for a UI that is only reachable internally.
+
+**Portainer:** create the stack from this Git repository with *Compose path* `docker-compose.yml`; for Traefik or a container proxy add the matching override file under *Additional paths*. Set the variables from `.env-example` as stack environment variables.
+
+### 3. First login
+
+On first start the UI creates an `admin` account. If `ADMIN_PASSWORD` is not set, a random password is generated and printed once — retrieve it with:
+
+```bash
+docker compose logs cert-ui | grep -A2 "Initial admin"
+```
+
+A password change and 2FA setup are enforced on first login.
 ---
 
 ## Configuration (environment variables)
@@ -46,7 +89,7 @@ It controls the resolver container via the mounted Docker socket (`docker exec`)
 | `TARGETS_FILE` | `/data/cert-targets.yml` | Distribution config (read + write) |
 | `LOG_MAX_BYTES` / `LOG_BACKUPS` | `10 MB` / `5` | Log rotation |
 
-In the resolver stack these are set with the `UI_` prefix (e.g. `UI_SECRET_KEY`); see the resolver's `docker-compose.yml`.
+The container paths (`DATA_DIR`, `LOG_DIR`, `CERT_DIR`, `CREDS_FILE`, `TARGETS_FILE`) are already set in `docker-compose.yml`; on the host side you only set `DATA_ROOT`, `LOG_ROOT` (and, depending on the proxy variant, `DOMAIN` / `PROXY_NETWORK`) in `.env`.
 
 ---
 
@@ -59,7 +102,22 @@ DATA_DIR=./data ADMIN_PASSWORD=admin SECRET_KEY=dev python app.py
 # → http://localhost:5000  (Flask dev server; production uses gunicorn)
 ```
 
-The standalone `docker-compose.yml` in this repo is for isolated testing only (`docker compose up --build`, needs a running resolver container) — for real use, deploy via the resolver stack.
+To test a locally built image, build it with `docker build` (see above) and start the stack as usual (needs a running resolver container on the same host).
+
+---
+
+## Troubleshooting
+
+**UI not reachable behind Traefik:** verify `DOMAIN` is set, and that both Traefik and `cert-ui` share the `traefik_proxy` network. Test the backend directly:
+```bash
+docker run --rm --network traefik_proxy curlimages/curl -s http://certificate-resolver-ui:5000/health
+```
+
+**nginx/Caddy: live output of issue/renew only appears at the end:** response buffering is on — keep `proxy_buffering off` (nginx) / `flush_interval -1` (Caddy) from the example configs.
+
+**Login loops back to the login page:** `SECURE_COOKIES=true` but the UI is opened over plain HTTP (or the other way round behind TLS: keep it `true`).
+
+**Actions fail with "No such container":** `RESOLVER_CONTAINER` must match the resolver's `container_name` (default `certificate-resolver`), and the resolver must be running.
 
 ---
 
@@ -67,7 +125,12 @@ The standalone `docker-compose.yml` in this repo is for isolated testing only (`
 
 ```
 .
-├── docker-compose.yml           # standalone test only
+├── docker-compose.yml           # base stack (no proxy, 127.0.0.1:5050)
+├── deploy/
+│   ├── traefik/                 # override: Traefik labels + network
+│   ├── caddy/                   # Caddyfile site block
+│   ├── nginx/                   # nginx server block
+│   └── proxy-network/           # override: join a containerized proxy's network
 ├── Dockerfile                   # builds the image (docker CLI + gunicorn)
 ├── .env-example
 ├── .github/workflows/           # builds and publishes the image to GHCR

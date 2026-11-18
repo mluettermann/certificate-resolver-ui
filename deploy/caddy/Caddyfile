@@ -1,0 +1,28 @@
+# Caddy site block for the Certificate Resolver UI.
+# Add it to your existing Caddyfile and reload Caddy (caddy reload).
+# Set SECURE_COOKIES=true in the UI's .env.
+#
+# Caddy sets X-Forwarded-For / X-Forwarded-Proto / Host automatically —
+# matching the UI's default TRUST_PROXY=true, PROXY_HOPS=1.
+
+cert.example.com {
+	# Caddy on the host:
+	reverse_proxy 127.0.0.1:5050 {
+		# The issue/renew output is streamed live — don't buffer it.
+		flush_interval -1
+	}
+
+	# Caddy as a container (with deploy/proxy-network/docker-compose.proxy-network.yml):
+	# reverse_proxy certificate-resolver-ui:5000 {
+	# 	flush_interval -1
+	# }
+
+	# TLS: by default Caddy obtains a certificate itself (needs ports 80/443
+	# reachable from the internet). For an internal-only UI, use a certificate
+	# issued by the resolver instead (deliver it with an "ssh" target):
+	# tls /etc/caddy/certs/example.com/fullchain.pem /etc/caddy/certs/example.com/privkey.pem
+
+	# Recommended: allow private networks / VPN only.
+	# @external not remote_ip private_ranges
+	# abort @external
+}

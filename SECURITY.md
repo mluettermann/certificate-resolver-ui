@@ -10,7 +10,7 @@ This UI is part of the [Certificate Resolver](https://github.com/mluettermann/ce
 
 ## Recommendations
 
-- Serve the UI **only behind TLS** (e.g. Traefik) and set `SECURE_COOKIES=true`.
+- Serve the UI **only behind TLS** (Traefik, Caddy or nginx — see `deploy/`) and set `SECURE_COOKIES=true`. The base compose binds it to `127.0.0.1` only; keep it that way unless you know why.
 - Preferably restrict access to a **VPN or internal network**; do not expose it directly to the internet.
 - Use a strong, random `SECRET_KEY` (`openssl rand -hex 32`). The app refuses to start without one.
 - Enable **2FA for every user**, give users the lowest role they need (`viewer` / `technician` / `admin`), and review the audit log regularly.
