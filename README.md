@@ -11,7 +11,7 @@ This repository builds the **`certificate-resolver-ui`** image. The UI is **opti
 - **Login + 2FA (TOTP)** with one-time backup codes (downloadable, shown once); forced password change on first login.
 - **Roles:** `admin` (full access), `technician` (issue/renew, edit targets, delete domains), `viewer` (read-only).
 - **Domain Setup:** register domains, issue/renew certificates with live output, view status & expiry, delete domains.
-- **Deploy Setup:** edit `cert-targets.yml` per domain with a service picker (nginx, Apache, Traefik, nginx Proxy Manager → SSH; IIS → SFTP drop).
+- **Deploy Setup:** edit `cert-targets.yml` per domain with a service picker (nginx, Apache, Traefik, nginx Proxy Manager → SSH; IIS → SFTP drop; Proxmox VE). SSH targets have an optional *Address family* (`any` / `inet` / `inet6`) — use `inet6` when a host's IPv4 only reaches an HTTP(S) proxy. Target types without a form (e.g. `windows-ssh`, `esxi`) are shown read-only and saved back unchanged; fields the form doesn't know are preserved as well.
 - **Administration:** user management and an audit log of UI actions.
 - **Hardening:** CSRF protection, `HttpOnly`/`SameSite`/optional `Secure` cookies, idle session timeout, brute-force lockout, real client IP via `X-Forwarded-For`.
 

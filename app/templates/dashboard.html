@@ -283,26 +283,50 @@ let deployLoaded = false;
 
 function newEntry(){
   return {type:"ssh", service:"", host:"", port:22, user:"root",
-          key:"/data/ssh/id_ed25519", remote_cert_dir:"", reload_cmd:"", sftp_users_str:""};
+          key:"/data/ssh/id_ed25519", remote_cert_dir:"", reload_cmd:"", sftp_users_str:"",
+          address_family:"", raw:null};
 }
+
+// Target types the editor has a form for. Any other type (windows-ssh, esxi,
+// …) is shown read-only and saved back
+// exactly as loaded, so editing in the UI never rewrites or drops it.
+const EDITABLE_TYPES = ["ssh", "sftp-drop", "proxmox"];
+// Keys the form manages itself; every other key of a loaded target is kept
+// (from entry.raw) and written back unchanged.
+const MANAGED_KEYS = ["type","service","host","port","user","key",
+                      "remote_cert_dir","reload_cmd","sftp_users","address_family"];
+const ADDRESS_FAMILIES = [
+  {val:"",      label:"Default (SSH_ADDRESS_FAMILY)"},
+  {val:"any",   label:"any — IPv4 or IPv6"},
+  {val:"inet",  label:"inet — IPv4 only"},
+  {val:"inet6", label:"inet6 — IPv6 only"},
+];
 
 function mappingToModel(mapping){
   return Object.keys(mapping).map(dom => ({
     domain: dom,
     entries: (mapping[dom]||[]).map(e => {
-      if(e.type === "sftp-drop"){
+      e = e || {};
+      const raw = JSON.parse(JSON.stringify(e));
+      const type = e.type || "ssh";   // deploy.sh defaults a missing type to ssh
+      if(!EDITABLE_TYPES.includes(type)){
+        return {type, other:true, raw};
+      }
+      if(type === "sftp-drop"){
         let u = e.sftp_users || [];
         if(typeof u === "string") u = [u];
-        return {type:"sftp-drop", service:e.service||"iis", sftp_users_str:u.join(", ")};
+        return {type:"sftp-drop", service:e.service||"iis", sftp_users_str:u.join(", "), raw};
       }
-      if(e.type === "proxmox"){
+      if(type === "proxmox"){
         return {type:"proxmox", service:"proxmox", host:e.host||"", port:e.port||22,
                 user:e.user||"root", key:e.key||"/data/ssh/id_ed25519",
-                remote_cert_dir:"", reload_cmd:"", sftp_users_str:""};
+                remote_cert_dir:"", reload_cmd:"", sftp_users_str:"",
+                address_family:e.address_family||"", raw};
       }
       return {type:"ssh", service:e.service||"", host:e.host||"", port:e.port||22,
               user:e.user||"root", key:e.key||"/data/ssh/id_ed25519",
-              remote_cert_dir:e.remote_cert_dir||"", reload_cmd:e.reload_cmd||""};
+              remote_cert_dir:e.remote_cert_dir||"", reload_cmd:e.reload_cmd||"",
+              address_family:e.address_family||"", raw};
     })
   }));
 }
@@ -313,40 +337,83 @@ function buildMapping(){
     const dom = (card.domain||"").trim();
     if(!dom) return;
     out[dom] = card.entries.map(e => {
-      if(e.type === "sftp-drop"){
-        const users = (e.sftp_users_str||"").split(",").map(s=>s.trim()).filter(Boolean);
-        const o = {type:"sftp-drop"};
-        if(e.service) o.service = e.service;
-        o.sftp_users = users;
-        return o;
-      }
-      if(e.type === "proxmox"){
-        const o = {type:"proxmox"};
-        if(e.host) o.host = e.host;
-        o.port = parseInt(e.port,10) || 22;
-        o.user = e.user || "root";
-        o.key = e.key || "/data/ssh/id_ed25519";
-        return o;
-      }
-      const o = {type:"ssh"};
-      if(e.service) o.service = e.service;
-      if(e.host) o.host = e.host;
-      o.port = parseInt(e.port,10) || 22;
-      o.user = e.user || "root";
-      o.key = e.key || "/data/ssh/id_ed25519";
-      if(e.remote_cert_dir) o.remote_cert_dir = e.remote_cert_dir;
-      if(e.reload_cmd) o.reload_cmd = e.reload_cmd;
-      return o;
+      if(e.other) return e.raw;
+      return withExtras(buildEntry(e), e.raw);
     });
   });
   return out;
+}
+
+// Append the keys of the originally loaded target that the form doesn't
+// manage (e.g. legacy_pfx or reload_script added in the YAML), so a
+// save through the UI doesn't silently strip them.
+function withExtras(o, raw){
+  if(!raw) return o;
+  Object.keys(raw).forEach(k => {
+    if(!MANAGED_KEYS.includes(k) && !(k in o)) o[k] = raw[k];
+  });
+  return o;
+}
+
+function buildEntry(e){
+  if(e.type === "sftp-drop"){
+    const users = (e.sftp_users_str||"").split(",").map(s=>s.trim()).filter(Boolean);
+    const o = {type:"sftp-drop"};
+    if(e.service) o.service = e.service;
+    o.sftp_users = users;
+    return o;
+  }
+  if(e.type === "proxmox"){
+    const o = {type:"proxmox"};
+    if(e.host) o.host = e.host;
+    o.port = parseInt(e.port,10) || 22;
+    o.user = e.user || "root";
+    o.key = e.key || "/data/ssh/id_ed25519";
+    if(e.address_family) o.address_family = e.address_family;
+    return o;
+  }
+  const o = {type:"ssh"};
+  if(e.service) o.service = e.service;
+  if(e.host) o.host = e.host;
+  o.port = parseInt(e.port,10) || 22;
+  o.user = e.user || "root";
+  o.key = e.key || "/data/ssh/id_ed25519";
+  if(e.remote_cert_dir) o.remote_cert_dir = e.remote_cert_dir;
+  if(e.reload_cmd) o.reload_cmd = e.reload_cmd;
+  if(e.address_family) o.address_family = e.address_family;
+  return o;
 }
 
 function serviceOptions(sel){
   return SERVICES.map(s => `<option value="${s.val}" ${s.val===sel?"selected":""}>${esc(s.label)}</option>`).join("");
 }
 
+function afOptions(sel){
+  sel = sel || "";
+  const opts = ADDRESS_FAMILIES.slice();
+  if(sel && !opts.some(o => o.val === sel)) opts.push({val:sel, label:sel + " (invalid)"});
+  return opts.map(o => `<option value="${esc(o.val)}" ${o.val===sel?"selected":""}>${esc(o.label)}</option>`).join("");
+}
+
+function otherEntryHtml(di, ei, e){
+  const r = e.raw || {};
+  const delTargetBtn = CAN_DEPLOY
+    ? `<button data-action="del-entry" data-di="${di}" data-ei="${ei}" class="ml-auto text-xs text-red-400 hover:text-red-300">Remove target</button>`
+    : "";
+  const details = ["host","address_family"].filter(k => r[k]).map(k => `${k}: ${esc(r[k])}`).join(" · ");
+  return `
+    <div class="border border-slate-700 rounded-lg p-3">
+      <div class="flex items-center gap-2">
+        <span class="text-sm font-medium">${esc(e.type)}</span>
+        ${details ? `<span class="text-xs text-slate-400">${details}</span>` : ""}
+        ${delTargetBtn}
+      </div>
+      <p class="text-xs text-slate-500 mt-1">This target type can't be edited here — change it in cert-targets.yml. It is kept unchanged when you save.</p>
+    </div>`;
+}
+
 function entryHtml(di, ei, e){
+  if(e.other) return otherEntryHtml(di, ei, e);
   const isSftp    = e.type === "sftp-drop";
   const isProxmox = e.type === "proxmox";
   const ssh = `
@@ -373,6 +440,10 @@ function entryHtml(di, ei, e){
         <label class="text-xs text-slate-400 col-span-2">Reload command (optional)
           <input ${RO} data-di="${di}" data-ei="${ei}" data-field="reload_cmd" value="${esc(e.reload_cmd)}" placeholder="systemctl reload nginx"
             class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+        <label class="text-xs text-slate-400 col-span-2">Address family
+          <select ${RO} data-di="${di}" data-ei="${ei}" data-field="address_family"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm">${afOptions(e.address_family)}</select>
+          <span class="block text-slate-500 mt-1">Use inet6 when the host's IPv4 (A record) only reaches an HTTP(S) proxy — SSH otherwise prefers IPv4.</span></label>
       </div>
     </details>`;
   const sftp = `
@@ -398,6 +469,10 @@ function entryHtml(di, ei, e){
         <label class="text-xs text-slate-400">SSH key (in container)
           <input ${RO} data-di="${di}" data-ei="${ei}" data-field="key" value="${esc(e.key)}"
             class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm"></label>
+        <label class="text-xs text-slate-400 col-span-2">Address family
+          <select ${RO} data-di="${di}" data-ei="${ei}" data-field="address_family"
+            class="mt-1 w-full bg-slate-900 border border-slate-600 rounded px-2 py-1 text-sm">${afOptions(e.address_family)}</select>
+          <span class="block text-slate-500 mt-1">Use inet6 when the host's IPv4 (A record) only reaches an HTTP(S) proxy — SSH otherwise prefers IPv4.</span></label>
       </div>
       <p class="text-xs text-slate-500 mt-1">Installs to /etc/pve/local/ and restarts pveproxy automatically.</p>
     </details>`;
@@ -452,7 +527,9 @@ cards.addEventListener("change", e => {
   const ent = model[di].entries[ei];
   ent.service = svc;
   const meta = SERVICES.find(s => s.val === svc);
-  ent.type = meta ? meta.type : "ssh";
+  const newType = meta ? meta.type : "ssh";
+  if(newType !== ent.type) ent.raw = null;   // extras of the old type don't apply
+  ent.type = newType;
   if(ent.type === "ssh" || ent.type === "proxmox"){
     const d = SERVICE_DEFAULTS[svc] || {};
     if(ent.type === "ssh"){
